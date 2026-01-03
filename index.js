@@ -4,6 +4,7 @@ const XLSX = require('xlsx');
 
 const TOURNAMENTS_DIR = path.join(__dirname, 'tournaments');
 const OUTPUT_FILENAME = 'justgo-import.xlsx';
+const TEMPLATE_FILENAME = 'USATT tournament results template.xls';
 
 const HEADER = [
 	'Firstname*',
@@ -127,6 +128,32 @@ const writeWorkbook = async (rows, outputPath) => {
 	XLSX.writeFile(workbook, outputPath);
 };
 
+// CSV generation removed: no longer producing justgo-players.csv
+
+const writeEstimatedRatingsToTemplate = async (players, templatePath, outputPath) => {
+	const sheetName = 'Estimated Ratings';
+
+	// Read the template workbook (may be .xls)
+	const workbook = XLSX.readFile(templatePath, { cellDates: true });
+
+	// Build the data array: header + rows
+	const header = ['Name', 'Membership#', 'Est Rating'];
+	const data = [header];
+
+	players.forEach((p) => {
+		const name = [p.firstName, p.lastName].map(normalizeString).filter(Boolean).join(' ');
+		const membership = normalizeString(p.usattId || '');
+		const rating = p.rating == null ? '' : String(p.rating);
+		data.push([name, membership, rating]);
+	});
+
+	const sheet = XLSX.utils.aoa_to_sheet(data);
+	workbook.Sheets[sheetName] = sheet;
+	if (!workbook.SheetNames.includes(sheetName)) workbook.SheetNames.push(sheetName);
+
+	XLSX.writeFile(workbook, outputPath);
+};
+
 const ensureOutputDir = async (dirPath) => {
 	await fs.mkdir(dirPath, { recursive: true });
 };
@@ -154,9 +181,29 @@ const run = async () => {
 	await ensureOutputDir(outputDir);
 
 	const outputPath = path.join(outputDir, OUTPUT_FILENAME);
-	await writeWorkbook(rows, outputPath);
+	try {
+		await writeWorkbook(rows, outputPath);
+		console.log(`Wrote ${rows.length} player(s) to ${outputPath}`);
+	} catch (err) {
+		console.warn(`Failed to write workbook: ${err.message}`);
+	}
 
-	console.log(`Wrote ${rows.length} player(s) to ${outputPath}`);
+	// Create HCTT results workbook based on the USATT template and populate
+	// the "Estimated Ratings" sheet with Name, Membership#, Est Rating.
+	try {
+		const templatePath = path.join(__dirname, TEMPLATE_FILENAME);
+		let dateStr = tournamentFolder;
+		if (/^\d{6}$/.test(tournamentFolder)) {
+			dateStr = `${tournamentFolder.slice(0,4)}-${tournamentFolder.slice(4,6)}-01`;
+		}
+		const resultsFilename = `HCTT ${dateStr} Results.xlsx`;
+		const resultsPath = path.join(outputDir, resultsFilename);
+		await writeEstimatedRatingsToTemplate(players, templatePath, resultsPath);
+		console.log(`Wrote Estimated Ratings to ${resultsPath}`);
+	} catch (err) {
+		console.warn(`Failed to write HCTT results workbook: ${err.message}`);
+	}
+
 	if (missingReport.length) {
 		console.warn('Players with missing required fields:');
 		missingReport.forEach((entry) => {
