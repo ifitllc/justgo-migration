@@ -4,7 +4,6 @@ const XLSX = require('xlsx');
 
 const TOURNAMENTS_DIR = path.join(__dirname, 'tournaments');
 const TEMPLATE_PATH = path.join(__dirname, 'USATT tournament results template.xls');
-const OUTPUT_FILENAME = 'justgo-results.xlsx';
 
 const MATCH_SHEET = 'Match Results';
 const ESTIMATED_SHEET = 'Estimated Ratings';
@@ -205,6 +204,8 @@ const ensureFolder = async (folderPath) => {
 	await fs.mkdir(folderPath, { recursive: true });
 };
 
+const buildOutputFilename = (folderArg) => `hctt-${folderArg}-result.xlsx`;
+
 const run = async () => {
 	const folderArg = resolveTournamentFolder();
 	if (!folderArg) {
@@ -225,7 +226,8 @@ const run = async () => {
 		membershipMap
 	});
 
-	const outputPath = path.join(folderPath, OUTPUT_FILENAME);
+	const outputFilename = buildOutputFilename(folderArg);
+	const outputPath = path.join(folderPath, outputFilename);
 	await ensureFolder(folderPath);
 	writeWorkbook(matchRows, estimatedRows, outputPath);
 
