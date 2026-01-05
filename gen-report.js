@@ -57,7 +57,10 @@ const findLatestFile = async (dirPath, token) => {
 
 const readCsvAsJson = async (filePath) => {
 	const csv = await fs.readFile(filePath, 'utf8');
-	const workbook = XLSX.read(csv, { type: 'string' });
+
+	// Keep all CSV values as literal text (e.g., scores like "8,5,5") instead of letting
+	// XLSX coerce them into dates or numbers.
+	const workbook = XLSX.read(csv, { type: 'string', raw: true });
 	const sheet = workbook.Sheets[workbook.SheetNames[0]];
 	return XLSX.utils.sheet_to_json(sheet, { defval: '' });
 };
