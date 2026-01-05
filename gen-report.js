@@ -144,6 +144,27 @@ const resolveName = (membershipNumber, membershipMap, membershipToPlayer, player
 	return '';
 };
 
+const collectParticipants = (matchResults, membershipLookup) => {
+	const membershipNumbers = new Set();
+	const fallbackKeys = new Set();
+
+	matchResults.forEach((row) => {
+		const winnerKey = normalizeString(row.MemNum_W);
+		const loserKey = normalizeString(row.MemNum_L);
+
+		const winnerMembership = resolveMembership(winnerKey, membershipLookup);
+		const loserMembership = resolveMembership(loserKey, membershipLookup);
+
+		if (winnerMembership) membershipNumbers.add(winnerMembership);
+		if (loserMembership) membershipNumbers.add(loserMembership);
+
+		if (!winnerMembership && winnerKey) fallbackKeys.add(winnerKey);
+		if (!loserMembership && loserKey) fallbackKeys.add(loserKey);
+	});
+
+	return { membershipNumbers, fallbackKeys };
+};
+
 const mapMatchResults = (matchResults, helpers) => {
 	const { membershipLookup, membershipMap, membershipToPlayer, playerById } = helpers;
 
@@ -155,8 +176,20 @@ const mapMatchResults = (matchResults, helpers) => {
 			const winnerMembership = resolveMembership(winnerKey, membershipLookup);
 			const loserMembership = resolveMembership(loserKey, membershipLookup);
 
-			const winnerName = resolveName(winnerMembership, membershipMap, membershipToPlayer, playerById, winnerKey);
-			const loserName = resolveName(loserMembership, membershipMap, membershipToPlayer, playerById, loserKey);
+			const winnerName = resolveName(
+				winnerMembership,
+				membershipMap,
+				membershipToPlayer,
+				playerById,
+				winnerKey
+			);
+			const loserName = resolveName(
+				loserMembership,
+				membershipMap,
+				membershipToPlayer,
+				playerById,
+				loserKey
+			);
 
 			const scores = normalizeString(row.Score);
 			const event = normalizeString(row.Division);
@@ -169,14 +202,21 @@ const mapMatchResults = (matchResults, helpers) => {
 };
 
 const mapEstimatedRatings = (players, helpers) => {
-	const { membershipLookup, membershipMap } = helpers;
+	const { membershipLookup, membershipMap, participants } = helpers;
 
-	return players.map((player) => {
-		const membershipNumber = resolveMembership(player.memberId || player.id, membershipLookup);
-		const estRating = membershipNumber ? membershipMap.get(membershipNumber)?.estRating || '' : '';
-		const name = formatName(player.firstName, player.lastName);
-		return [name, membershipNumber, estRating];
-	});
+	return players
+		.map((player) => {
+			const membershipNumber = resolveMembership(player.memberId || player.id, membershipLookup);
+			const participatedByMembership = membershipNumber && participants.membershipNumbers.has(membershipNumber);
+			const participatedByFallback = participants.fallbackKeys.has(normalizeString(player.id || player.memberId));
+
+			if (!participatedByMembership && !participatedByFallback) return null;
+
+			const estRating = membershipNumber ? membershipMap.get(membershipNumber)?.estRating || '' : '';
+			const name = formatName(player.firstName, player.lastName);
+			return [name, membershipNumber, estRating];
+		})
+		.filter(Boolean);
 };
 
 const writeWorkbook = (matchRows, estimatedRows, outputPath) => {
@@ -204,7 +244,31 @@ const ensureFolder = async (folderPath) => {
 	await fs.mkdir(folderPath, { recursive: true });
 };
 
-const buildOutputFilename = (folderArg) => `hctt-${folderArg}-result.xlsx`;
+const buildOutputFilename = (folderArg) => `hctt-${folderArg}-results.xlsx`;
+
+const archiveExistingOutput = async (outputPath) => {
+	try {
+		await fs.access(outputPath);
+	} catch {
+		return null;
+	}
+
+	const dir = path.dirname(outputPath);
+	const ext = path.extname(outputPath);
+	const base = path.basename(outputPath, ext);
+
+	let version = 1;
+	while (true) {
+		const candidate = path.join(dir, `${base}_v${version}${ext}`);
+		try {
+			await fs.access(candidate);
+			version += 1;
+		} catch {
+			await fs.rename(outputPath, candidate);
+			return candidate;
+		}
+	}
+};
 
 const run = async () => {
 	const folderArg = resolveTournamentFolder();
@@ -215,6 +279,7 @@ const run = async () => {
 	const { folderPath, matchResults, players, memberships } = await loadInputs(folderArg);
 	const membershipMap = buildMembershipMap(memberships);
 	const helperMaps = buildPlayerMaps(players, membershipMap);
+	const participants = collectParticipants(matchResults, helperMaps.membershipLookup);
 	const matchRows = mapMatchResults(matchResults, {
 		membershipLookup: helperMaps.membershipLookup,
 		membershipMap,
@@ -223,16 +288,19 @@ const run = async () => {
 	});
 	const estimatedRows = mapEstimatedRatings(players, {
 		membershipLookup: helperMaps.membershipLookup,
-		membershipMap
+		membershipMap,
+		participants
 	});
 
 	const outputFilename = buildOutputFilename(folderArg);
 	const outputPath = path.join(folderPath, outputFilename);
 	await ensureFolder(folderPath);
+	const archivedPath = await archiveExistingOutput(outputPath);
 	writeWorkbook(matchRows, estimatedRows, outputPath);
 
 	console.log(`Wrote Match Results rows: ${matchRows.length}`);
 	console.log(`Wrote Estimated Ratings rows: ${estimatedRows.length}`);
+	if (archivedPath) console.log(`Archived previous output to: ${archivedPath}`);
 	console.log(`Output: ${outputPath}`);
 };
 
