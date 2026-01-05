@@ -84,6 +84,18 @@ const loadInputs = async (folder) => {
 	return { folderPath, matchResults, players, memberships };
 };
 
+const loadPlayersJson = async (folderPath) => {
+	const jsonPath = path.join(folderPath, 'players.json');
+	try {
+		const raw = await fs.readFile(jsonPath, 'utf8');
+		const data = JSON.parse(raw);
+		return Array.isArray(data) ? data : [];
+	} catch (err) {
+		if (err.code === 'ENOENT') return [];
+		throw err;
+	}
+};
+
 const buildMembershipMap = (memberships) => {
 	const byNumber = new Map();
 
@@ -122,6 +134,18 @@ const buildPlayerMaps = (players, membershipMap) => {
 	});
 
 	return { membershipLookup, membershipToPlayer, playerById };
+};
+
+const buildRatingLookup = (playersJson) => {
+	const byMembership = new Map();
+
+	playersJson.forEach((player) => {
+		const membershipNumber = normalizeMembershipNumber(player.usattId || player.memberId || player.omnipongId);
+		const rating = normalizeString(player.rating);
+		if (membershipNumber && rating) byMembership.set(membershipNumber, rating);
+	});
+
+	return byMembership;
 };
 
 const resolveMembership = (key, membershipLookup) => {
@@ -205,7 +229,7 @@ const mapMatchResults = (matchResults, helpers) => {
 };
 
 const mapEstimatedRatings = (players, helpers) => {
-	const { membershipLookup, membershipMap, participants } = helpers;
+	const { membershipLookup, membershipMap, participants, ratingLookup } = helpers;
 
 	return players
 		.map((player) => {
@@ -215,7 +239,9 @@ const mapEstimatedRatings = (players, helpers) => {
 
 			if (!participatedByMembership && !participatedByFallback) return null;
 
-			const estRating = membershipNumber ? membershipMap.get(membershipNumber)?.estRating || '' : '';
+			const estRating = membershipNumber
+				? membershipMap.get(membershipNumber)?.estRating || ratingLookup.get(membershipNumber) || ''
+				: '';
 			const name = formatName(player.firstName, player.lastName);
 			return [name, membershipNumber, estRating];
 		})
@@ -280,7 +306,9 @@ const run = async () => {
 	}
 
 	const { folderPath, matchResults, players, memberships } = await loadInputs(folderArg);
+	const playersJson = await loadPlayersJson(folderPath);
 	const membershipMap = buildMembershipMap(memberships);
+	const ratingLookup = buildRatingLookup(playersJson);
 	const helperMaps = buildPlayerMaps(players, membershipMap);
 	const participants = collectParticipants(matchResults, helperMaps.membershipLookup);
 	const matchRows = mapMatchResults(matchResults, {
@@ -292,7 +320,8 @@ const run = async () => {
 	const estimatedRows = mapEstimatedRatings(players, {
 		membershipLookup: helperMaps.membershipLookup,
 		membershipMap,
-		participants
+		participants,
+		ratingLookup
 	});
 
 	const outputFilename = buildOutputFilename(folderArg);
